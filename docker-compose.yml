@@ -1,0 +1,57 @@
+version: "3.9"
+
+services:
+  # ─── PostgreSQL + PostGIS ───
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: brinesim
+      POSTGRES_USER: brinesim
+      POSTGRES_PASSWORD: brinesim
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brinesim"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ─── Redis ───
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ─── FastAPI Backend ───
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://brinesim:brinesim@db:5432/brinesim
+      DATABASE_URL_SYNC: postgresql://brinesim:brinesim@db:5432/brinesim
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-dev-secret-key-change-in-production}
+      KAKAO_CLIENT_ID: ${KAKAO_CLIENT_ID:-}
+      FRONTEND_URL: http://localhost:3000
+      DEBUG: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  pgdata:
