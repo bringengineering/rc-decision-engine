@@ -1,57 +1,180 @@
 version: "3.9"
 
 services:
-  # ─── PostgreSQL + PostGIS ───
+  # ===== PostgreSQL 16 =====
   db:
-    image: postgis/postgis:16-3.4
+    image: postgres:16-alpine
     environment:
-      POSTGRES_DB: brinesim
-      POSTGRES_USER: brinesim
-      POSTGRES_PASSWORD: brinesim
+      POSTGRES_USER: ${POSTGRES_USER:-rcengine}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rcengine_dev_2026}
+      POSTGRES_DB: ${POSTGRES_DB:-rc_decision}
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U brinesim"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rcengine}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-  # ─── Redis ───
+  # ===== InfluxDB 2.7 =====
+  influxdb:
+    image: influxdb:2.7
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_ADMIN_USER:-admin}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_ADMIN_PASSWORD:-influx_admin_2026}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_ORG:-rcengine}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_BUCKET:-sensor_raw}
+      DOCKER_INFLUXDB_INIT_RETENTION: 168h
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN:-rc-influx-dev-token-2026}
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdata:/var/lib/influxdb2
+      - ./docker/influxdb/setup.sh:/docker-entrypoint-initdb.d/setup.sh:ro
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===== RabbitMQ 3.13 =====
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmqdata:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===== MinIO (S3-compatible) =====
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===== Redis 7 =====
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    volumes:
+      - redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
-      timeout: 5s
+      timeout: 3s
       retries: 5
 
-  # ─── FastAPI Backend ───
+  # ===== FastAPI Backend =====
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: docker/backend.Dockerfile
     ports:
       - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - ./engine:/app/engine
     environment:
-      DATABASE_URL: postgresql+asyncpg://brinesim:brinesim@db:5432/brinesim
-      DATABASE_URL_SYNC: postgresql://brinesim:brinesim@db:5432/brinesim
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-rcengine}:${POSTGRES_PASSWORD:-rcengine_dev_2026}@db:5432/${POSTGRES_DB:-rc_decision}
       REDIS_URL: redis://redis:6379/0
-      SECRET_KEY: ${SECRET_KEY:-dev-secret-key-change-in-production}
-      KAKAO_CLIENT_ID: ${KAKAO_CLIENT_ID:-}
-      FRONTEND_URL: http://localhost:3000
-      DEBUG: "true"
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_ORG: ${INFLUXDB_ORG:-rcengine}
+      INFLUXDB_BUCKET: ${INFLUXDB_BUCKET:-sensor_raw}
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:-rc-influx-dev-token-2026}
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-guest}:${RABBITMQ_DEFAULT_PASS:-guest}@rabbitmq:5672/
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-simulation-files}
+      MINIO_USE_SSL: "false"
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-secret-key-change-me}
+      APP_ENV: development
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+      influxdb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ===== Celery Worker =====
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
     volumes:
       - ./backend:/app
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      - ./engine:/app/engine
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-rcengine}:${POSTGRES_PASSWORD:-rcengine_dev_2026}@db:5432/${POSTGRES_DB:-rc_decision}
+      REDIS_URL: redis://redis:6379/0
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_ORG: ${INFLUXDB_ORG:-rcengine}
+      INFLUXDB_BUCKET: ${INFLUXDB_BUCKET:-sensor_raw}
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:-rc-influx-dev-token-2026}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-simulation-files}
+      MINIO_USE_SSL: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.simulation.tasks worker --loglevel=info --concurrency=2
+
+  # ===== Sensor Consumer (RabbitMQ -> InfluxDB) =====
+  sensor-consumer:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    volumes:
+      - ./backend:/app
+      - ./engine:/app/engine
+    environment:
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_ORG: ${INFLUXDB_ORG:-rcengine}
+      INFLUXDB_BUCKET: ${INFLUXDB_BUCKET:-sensor_raw}
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:-rc-influx-dev-token-2026}
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-guest}:${RABBITMQ_DEFAULT_PASS:-guest}@rabbitmq:5672/
+    depends_on:
+      influxdb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    command: python -m app.sensors.consumer
 
 volumes:
   pgdata:
+  influxdata:
+  rabbitmqdata:
+  miniodata:
+  redisdata:

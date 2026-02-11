@@ -1,146 +1,68 @@
-"""Projects API Router — Full CRUD"""
+"""Project API endpoints."""
 
-from typing import List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
-from app.auth.router import get_current_user
-from app.models import User
-from app.projects import schemas, service
+from app.db.postgres import get_db
+from app.db.models import User
+from app.dependencies import get_current_user
+from app.projects.schemas import ProjectCreate, ProjectUpdate, ProjectResponse
+from app.projects import service
 
-router = APIRouter(prefix="/api/projects", tags=["projects"])
+router = APIRouter()
 
 
-@router.get("", response_model=List[schemas.ProjectListItem])
+@router.get("/", response_model=list[ProjectResponse])
 async def list_projects(
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
 ):
-    return await service.list_projects(db, user)
+    return await service.get_projects(db, current_user.id)
 
 
-@router.post("", response_model=schemas.ProjectResponse, status_code=201)
+@router.post("/", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 async def create_project(
-    data: schemas.ProjectCreate,
+    data: ProjectCreate,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
 ):
-    return await service.create_project(db, data, user)
+    return await service.create_project(db, current_user.id, **data.model_dump())
 
 
-@router.get("/{project_id}", response_model=schemas.ProjectResponse)
+@router.get("/{project_id}", response_model=ProjectResponse)
 async def get_project(
     project_id: UUID,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
 ):
-    project = await service.get_project(db, project_id, user)
+    project = await service.get_project(db, project_id, current_user.id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     return project
 
 
-@router.put("/{project_id}", response_model=schemas.ProjectResponse)
+@router.put("/{project_id}", response_model=ProjectResponse)
 async def update_project(
     project_id: UUID,
-    data: schemas.ProjectUpdate,
+    data: ProjectUpdate,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
 ):
-    project = await service.get_project(db, project_id, user)
+    project = await service.get_project(db, project_id, current_user.id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    return await service.update_project(db, project, data)
+    return await service.update_project(db, project, **data.model_dump(exclude_unset=True))
 
 
-@router.delete("/{project_id}", status_code=204)
+@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project(
     project_id: UUID,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
 ):
-    project = await service.get_project(db, project_id, user)
+    project = await service.get_project(db, project_id, current_user.id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     await service.delete_project(db, project)
-
-
-# ─── Road Segments ───
-
-@router.post("/{project_id}/roads", response_model=schemas.RoadSegmentResponse, status_code=201)
-async def add_road(
-    project_id: UUID,
-    data: schemas.RoadSegmentCreate,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    project = await service.get_project(db, project_id, user)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    return await service.add_road_segment(db, project_id, data)
-
-
-# ─── Spray Devices ───
-
-@router.post("/{project_id}/devices", response_model=schemas.SprayDeviceResponse, status_code=201)
-async def add_device(
-    project_id: UUID,
-    data: schemas.SprayDeviceCreate,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    project = await service.get_project(db, project_id, user)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    return await service.add_spray_device(db, project_id, data)
-
-
-@router.delete("/{project_id}/devices/{device_db_id}", status_code=204)
-async def remove_device(
-    project_id: UUID,
-    device_db_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    from sqlalchemy import select
-    from app.models import SprayDevice
-    result = await db.execute(
-        select(SprayDevice).where(SprayDevice.id == device_db_id, SprayDevice.project_id == project_id)
-    )
-    device = result.scalar_one_or_none()
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
-    await service.delete_spray_device(db, device)
-
-
-# ─── Supply System ───
-
-@router.put("/{project_id}/supply", response_model=schemas.SupplySystemResponse)
-async def set_supply(
-    project_id: UUID,
-    data: schemas.SupplySystemCreate,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    project = await service.get_project(db, project_id, user)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    return await service.set_supply_system(db, project_id, data)
-
-
-# ─── Underground Utilities ───
-
-@router.post("/{project_id}/utilities", response_model=schemas.UndergroundUtilityResponse, status_code=201)
-async def add_utility(
-    project_id: UUID,
-    data: schemas.UndergroundUtilityCreate,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    project = await service.get_project(db, project_id, user)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    return await service.add_utility(db, project_id, data)

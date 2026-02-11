@@ -1,5 +1,0 @@
-# Brine Spray Simulation Engine - Dependencies
-# Core (no external dependencies for engine)
-# Testing
-pytest>=7.0
-pytest-cov>=4.0

@@ -1,181 +1,159 @@
-"""Simulation Service — bridges DB models to engine"""
+"""Simulation orchestration service.
 
-from dataclasses import asdict
-from typing import Tuple
+Chains: Physics Engine -> Calibration -> Monte Carlo -> Decision -> Report
+"""
 
-from app.models import Project
+from datetime import datetime, timezone
+from typing import Any
+from uuid import UUID
 
-# Import the simulation engine (migrated from prototype)
-import sys
-import os
-engine_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "engine")
-if engine_path not in sys.path:
-    sys.path.insert(0, os.path.dirname(engine_path))
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from engine.neutral_model import (
-    SimulationProject as EngineProject,
-    RoadSegment as EngineRoad,
-    RoadType, SurfaceMaterial,
-    BrineSprayDevice as EngineDevice,
-    SprayPattern, InstallationType,
-    SupplySystem as EngineSupply,
-    UndergroundUtility as EngineUtility,
-)
-from engine.gis_reality import (
-    EnvironmentContext, Season, TimeOfDay, TrafficLevel,
-    KOREA_CLIMATE_PRESETS, estimate_ice_formation_risk,
-)
-from engine.spray_simulation import run_full_simulation
-from engine.rule_engine import evaluate
-from engine.report_generator import generate_report
+from app.db.models import Asset, Project, SimulationRun, DecisionReport
+from engine.domain.enums import AssetType, SimulationType
+from engine.domain.models import EnvironmentCondition, PhysicsAsset, DecisionResult
+from engine.environment.climate import get_preset
+from engine.physics.navier_stokes import NavierStokesEngine
+from engine.physics.thermodynamics import ThermodynamicsEngine
+from engine.physics.spray_coverage import SprayCoverageEngine
+from engine.decision.judge import Judge
 
 
-def build_engine_project(project: Project) -> EngineProject:
-    """DB Project model → Engine SimulationProject"""
-
-    roads = []
-    for r in project.road_segments:
-        roads.append(EngineRoad(
-            segment_id=r.segment_id,
-            road_type=RoadType(r.road_type),
-            surface_material=SurfaceMaterial(r.surface_material),
-            length_m=r.length_m,
-            width_m=r.width_m,
-            lanes=r.lanes,
-            slope_percent=r.slope_percent or 0.0,
-            elevation_m=r.elevation_m or 0.0,
-            has_median=r.has_median or False,
-            has_shoulder=r.has_shoulder if r.has_shoulder is not None else True,
-            shoulder_width_m=r.shoulder_width_m or 2.0,
+def _build_physics_assets(db_assets: list[Asset]) -> list[PhysicsAsset]:
+    """Convert DB assets to engine domain models."""
+    result = []
+    for asset in db_assets:
+        result.append(PhysicsAsset(
+            id=str(asset.id),
+            type=AssetType(asset.type),
+            name=asset.name,
+            geometry=asset.geometry_json,
+            properties=asset.properties or {},
         ))
+    return result
 
-    devices = []
-    for d in project.spray_devices:
-        devices.append(EngineDevice(
-            device_id=d.device_id,
-            position_along_road_m=d.position_along_m,
-            position_cross_m=d.position_cross_m or 0.0,
-            installation_type=InstallationType(d.installation_type),
-            burial_depth_mm=d.burial_depth_mm or 0.0,
-            spray_pattern=SprayPattern(d.spray_pattern),
-            spray_angle_deg=d.spray_angle_deg,
-            spray_range_m=d.spray_range_m,
-            flow_rate_lpm=d.flow_rate_lpm,
-            nozzle_diameter_mm=d.nozzle_diameter_mm or 12.0,
-            brine_concentration_percent=d.brine_concentration_percent or 23.0,
-        ))
 
-    supply = None
-    if project.supply_system:
-        s = project.supply_system
-        supply = EngineSupply(
-            tank_capacity_l=s.tank_capacity_l,
-            pump_pressure_bar=s.pump_pressure_bar,
-            pipe_diameter_mm=s.pipe_diameter_mm,
-            pipe_material=s.pipe_material or "HDPE",
-            pipe_burial_depth_mm=s.pipe_burial_depth_mm or 0.0,
-            has_heating=s.has_heating or False,
-            has_insulation=s.has_insulation or False,
+def _resolve_environment(
+    climate_preset: str | None, environment_override: dict | None
+) -> EnvironmentCondition:
+    """Build environment from preset or override."""
+    if climate_preset:
+        preset = get_preset(climate_preset)
+        if preset:
+            env = preset.conditions
+            if environment_override:
+                data = env.model_dump()
+                data.update(environment_override)
+                return EnvironmentCondition(**data)
+            return env
+
+    if environment_override:
+        return EnvironmentCondition(**environment_override)
+
+    return EnvironmentCondition()  # defaults
+
+
+def _get_physics_engine(sim_type: str):
+    """Select the appropriate physics engine."""
+    if sim_type == "thermal":
+        return ThermodynamicsEngine()
+    elif sim_type == "fluid":
+        return NavierStokesEngine()
+    else:  # salt_spray (default) uses grid coverage
+        return SprayCoverageEngine()
+
+
+async def run_simulation(
+    db: AsyncSession,
+    project_id: UUID,
+    user_id: UUID,
+    simulation_type: str = "salt_spray",
+    climate_preset: str | None = None,
+    environment_override: dict | None = None,
+    monte_carlo_n: int = 1000,
+    params_override: dict | None = None,
+) -> SimulationRun:
+    """Execute simulation pipeline synchronously (Phase 1).
+
+    In Phase 2+, this will be dispatched to Celery.
+    """
+    # Load project with assets
+    result = await db.execute(
+        select(Project).options(selectinload(Project.assets)).where(Project.id == project_id)
+    )
+    project = result.scalar_one_or_none()
+    if not project:
+        raise ValueError(f"Project {project_id} not found")
+
+    # Create simulation run record
+    sim_run = SimulationRun(
+        project_id=project_id,
+        triggered_by=user_id,
+        simulation_type=simulation_type,
+        input_params={
+            "climate_preset": climate_preset,
+            "environment_override": environment_override,
+            "monte_carlo_n": monte_carlo_n,
+        },
+        status="running",
+        started_at=datetime.now(timezone.utc),
+    )
+    db.add(sim_run)
+    await db.flush()
+
+    try:
+        # Build inputs
+        physics_assets = _build_physics_assets(project.assets)
+        environment = _resolve_environment(climate_preset, environment_override)
+        physics_engine = _get_physics_engine(simulation_type)
+
+        # Run The Judge (includes Monte Carlo)
+        judge = Judge(physics_engine, n_samples=monte_carlo_n)
+        decision: DecisionResult = judge.decide(
+            assets=physics_assets,
+            environment=environment,
+            safety_factor_target=project.safety_factor_target,
+            params=params_override,
         )
 
-    utilities = []
-    for u in project.underground_utilities:
-        utilities.append(EngineUtility(
-            utility_id=u.utility_id,
-            utility_type=u.utility_type,
-            depth_mm=u.depth_mm,
-            position_cross_m=u.position_cross_m or 0.0,
-            diameter_mm=u.diameter_mm,
-        ))
+        # Store results
+        sim_run.result = {
+            "verdict": decision.verdict.value,
+            "failure_probability": decision.failure_probability,
+            "mean_safety_factor": decision.mean_safety_factor,
+            "ucl_95": decision.ucl_95,
+            "reasoning": decision.reasoning,
+            "details": decision.details,
+        }
+        sim_run.status = "completed"
+        sim_run.completed_at = datetime.now(timezone.utc)
 
-    return EngineProject(
-        project_id=str(project.id),
-        project_name=project.name,
-        location_name=project.location_name or "",
-        latitude=project.latitude or 0.0,
-        longitude=project.longitude or 0.0,
-        road_segments=roads,
-        spray_devices=devices,
-        supply_system=supply,
-        underground_utilities=utilities,
-    )
+        # Create decision report
+        report = DecisionReport(
+            project_id=project_id,
+            simulation_run_id=sim_run.id,
+            status=decision.verdict.value,
+            failure_probability=decision.failure_probability,
+            safety_factor_result=decision.mean_safety_factor,
+            safety_factor_target=decision.safety_factor_target,
+            monte_carlo_n=decision.monte_carlo_n,
+            ucl_95=decision.ucl_95,
+            details=decision.details,
+        )
+        db.add(report)
+        await db.flush()
 
+    except Exception as e:
+        sim_run.status = "failed"
+        sim_run.result = {"error": str(e)}
+        sim_run.completed_at = datetime.now(timezone.utc)
+        await db.flush()
 
-def build_environment(project: Project, climate_preset: str) -> EnvironmentContext:
-    """Build environment context from project + climate preset"""
-
-    if climate_preset not in KOREA_CLIMATE_PRESETS:
-        climate_preset = "gangwon_winter_night"
-
-    climate = KOREA_CLIMATE_PRESETS[climate_preset]
-
-    elevation = 0.0
-    if project.road_segments:
-        elevation = project.road_segments[0].elevation_m or 0.0
-
-    return EnvironmentContext(
-        location_name=project.location_name or "Unknown",
-        latitude=project.latitude or 0.0,
-        longitude=project.longitude or 0.0,
-        elevation_m=elevation,
-        season=Season.WINTER,
-        time_of_day=TimeOfDay.NIGHT,
-        climate=climate,
-        traffic_level=TrafficLevel.LOW,
-    )
+    return sim_run
 
 
-def run_simulation_sync(engine_project: EngineProject, env: EnvironmentContext) -> Tuple[dict, dict, str]:
-    """
-    Run full simulation pipeline and return serializable results.
-    Returns: (sim_result_dict, judgment_dict, report_text)
-    """
-    # 1. Run simulation
-    sim_result = run_full_simulation(engine_project, env, resolution_m=1.0)
-
-    # 2. Evaluate (Failure-First)
-    judgment = evaluate(engine_project, env, sim_result)
-
-    # 3. Generate report
-    report_text = generate_report(engine_project, env, sim_result, judgment)
-
-    # 4. Serialize to dicts (for JSON storage)
-    sim_dict = {
-        "total_road_area_m2": sim_result.total_road_area_m2,
-        "covered_area_m2": sim_result.covered_area_m2,
-        "coverage_ratio": sim_result.coverage_ratio,
-        "uncovered_zones": sim_result.uncovered_zones,
-        "overlap_area_m2": sim_result.overlap_area_m2,
-        "total_brine_consumption_lph": sim_result.total_brine_consumption_lph,
-        "device_results": [
-            {
-                "device_id": dr.device_id,
-                "effective_range_m": dr.effective_range_m,
-                "drift_offset_m": dr.drift_offset_m,
-                "coverage_area_m2": dr.coverage_area_m2,
-                "brine_consumption_lpm": dr.brine_consumption_lpm,
-            }
-            for dr in sim_result.device_results
-        ],
-    }
-
-    judgment_dict = {
-        "verdict": judgment.verdict.value,
-        "confidence": judgment.confidence,
-        "summary": judgment.summary,
-        "failures": [
-            {
-                "rule_id": f.rule_id,
-                "category": f.category,
-                "severity": f.severity.value,
-                "description": f.description,
-                "evidence": f.evidence,
-                "recommendation": f.recommendation,
-            }
-            for f in judgment.failures
-        ],
-        "conditions": judgment.conditions,
-        "limitations": judgment.limitations,
-    }
-
-    return sim_dict, judgment_dict, report_text
+async def get_simulation_run(db: AsyncSession, run_id: UUID) -> SimulationRun | None:
+    result = await db.execute(select(SimulationRun).where(SimulationRun.id == run_id))
+    return result.scalar_one_or_none()

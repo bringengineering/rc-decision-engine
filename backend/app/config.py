@@ -1,44 +1,47 @@
-"""
-Application Configuration
-Environment variables loaded from .env file
-"""
+"""Application configuration via environment variables."""
 
 from pydantic_settings import BaseSettings
-from typing import Optional
 
 
 class Settings(BaseSettings):
-    # Database
-    DATABASE_URL: str = "postgresql+asyncpg://brinesim:brinesim@localhost:5432/brinesim"
-    DATABASE_URL_SYNC: str = "postgresql://brinesim:brinesim@localhost:5432/brinesim"
+    # PostgreSQL
+    DATABASE_URL: str = "postgresql+asyncpg://rcengine:rcengine_dev_2026@db:5432/rc_decision"
+
+    # InfluxDB
+    INFLUXDB_URL: str = "http://influxdb:8086"
+    INFLUXDB_ORG: str = "rcengine"
+    INFLUXDB_BUCKET: str = "sensor_raw"
+    INFLUXDB_TOKEN: str = "rc-influx-dev-token-2026"
+
+    # RabbitMQ
+    RABBITMQ_URL: str = "amqp://guest:guest@rabbitmq:5672/"
+
+    # MinIO
+    MINIO_ENDPOINT: str = "minio:9000"
+    MINIO_ACCESS_KEY: str = "minioadmin"
+    MINIO_SECRET_KEY: str = "minioadmin"
+    MINIO_BUCKET: str = "simulation-files"
+    MINIO_USE_SSL: bool = False
 
     # Redis
-    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_URL: str = "redis://redis:6379/0"
 
-    # Auth
-    SECRET_KEY: str = "dev-secret-key-change-in-production"
-    ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
+    # JWT
+    JWT_SECRET_KEY: str = "dev-secret-key-change-me"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRE_MINUTES: int = 1440
 
     # Kakao OAuth
     KAKAO_CLIENT_ID: str = ""
+    KAKAO_CLIENT_SECRET: str = ""
     KAKAO_REDIRECT_URI: str = "http://localhost:8000/api/auth/kakao/callback"
 
-    # Server
-    HOST: str = "0.0.0.0"
-    PORT: int = 8000
-    DEBUG: bool = True
-
-    # CORS
+    # App
+    APP_ENV: str = "development"
+    APP_DEBUG: bool = True
     FRONTEND_URL: str = "http://localhost:3000"
 
-    # App
-    APP_NAME: str = "Brine Spray Simulation Engine"
-    APP_VERSION: str = "0.2.0"
-
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    model_config = {"env_file": ".env", "extra": "ignore"}
 
 
 settings = Settings()

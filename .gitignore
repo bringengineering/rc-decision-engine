@@ -6,53 +6,54 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-*.egg
 .eggs/
 
 # Virtual environments
-venv/
-.env/
 .venv/
+venv/
+ENV/
+
+# Environment files
+.env
+.env.local
+.env.production
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# Environment variables
-.env
-.env.local
-
-# Test / Coverage
-.coverage
-htmlcov/
-.pytest_cache/
-.tox/
-
-# Distribution
-*.tar.gz
-*.whl
-
-# Logs
-*.log
 
 # Docker
 docker-compose.override.yml
 
-# Node (frontend)
-node_modules/
-.next/
-out/
+# Database
+*.db
+*.sqlite3
 
-# Backend env
-backend/.env
+# Logs
+*.log
+logs/
 
-# Claude
-.claude/
+# OS
+.DS_Store
+Thumbs.db
+
+# Test / Coverage
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Model weights (large files)
+engine/pinns/pretrained/*.pt
+engine/pinns/pretrained/*.pth
+!engine/pinns/pretrained/.gitkeep
+
+# MinIO data
+minio_data/
+
+# Simulation output
+*.vtk
+*.vtu
+*.mesh

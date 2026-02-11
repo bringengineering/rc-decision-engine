@@ -1,8 +1,9 @@
-"""Auth Pydantic Schemas"""
+"""Auth request/response schemas."""
 
-from pydantic import BaseModel, EmailStr
 from typing import Optional
 from uuid import UUID
+
+from pydantic import BaseModel, EmailStr
 
 
 class UserRegister(BaseModel):
@@ -16,17 +17,14 @@ class UserLogin(BaseModel):
     password: str
 
 
-class KakaoCallback(BaseModel):
+class KakaoAuthRequest(BaseModel):
     code: str
+    redirect_uri: Optional[str] = None
 
 
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
-
-
-class TokenData(BaseModel):
-    user_id: Optional[str] = None
 
 
 class UserResponse(BaseModel):
@@ -35,12 +33,6 @@ class UserResponse(BaseModel):
     name: str
     provider: str
     role: str
-    org_id: Optional[UUID] = None
+    is_active: bool
 
-    class Config:
-        from_attributes = True
-
-
-class UserUpdate(BaseModel):
-    name: Optional[str] = None
-    role: Optional[str] = None
+    model_config = {"from_attributes": True}
