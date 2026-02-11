@@ -27,7 +27,7 @@ async def get_project(db: AsyncSession, project_id: UUID, owner_id: UUID) -> Pro
     result = await db.execute(
         select(Project)
         .options(selectinload(Project.assets))
-        .where(Project.id == project_id, Project.owner_id == owner_id)
+        .where((Project.id == project_id) & (Project.owner_id == owner_id))
     )
     return result.scalar_one_or_none()
 

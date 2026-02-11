@@ -80,7 +80,7 @@ async def get_or_create_kakao_user(db: AsyncSession, code: str, redirect_uri: st
     nickname = kakao_account.get("profile", {}).get("nickname", f"User_{kakao_id}")
 
     result = await db.execute(
-        select(User).where(User.provider == "kakao", User.provider_id == kakao_id)
+        select(User).where((User.provider == "kakao") & (User.provider_id == kakao_id))
     )
     user = result.scalar_one_or_none()
     if not user:

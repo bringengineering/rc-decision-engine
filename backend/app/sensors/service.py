@@ -25,7 +25,7 @@ async def create_sensor_mapping(
 
 async def get_sensor_mappings(db: AsyncSession, asset_id: UUID) -> list[SensorMapping]:
     result = await db.execute(
-        select(SensorMapping).where(SensorMapping.asset_id == asset_id, SensorMapping.is_active.is_(True))
+        select(SensorMapping).where((SensorMapping.asset_id == asset_id) & (SensorMapping.is_active.is_(True)))
     )
     return list(result.scalars().all())
 
