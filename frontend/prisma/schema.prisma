@@ -1,0 +1,108 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Project {
+  id                    String   @id @default(cuid())
+  projectName           String
+  customerName          String
+  contactName           String   @default("")
+  contactEmail          String?
+  contactPhone          String?
+  buildingType          String   @default("학교")
+  buildingName          String   @default("")
+  campusOrSiteName      String?
+  totalAreaM2           Float?
+  numberOfBuildings     Int?
+  contractType          String?
+  operatingHoursWeekday String?
+  operatingHoursWeekend String?
+  vacationPeriods       String?
+  hvacType              String?
+  keyFacilities         String?
+  consultantMemo        String?
+  status                String   @default("draft")
+  analysisVersion       String?
+  dataSourceType        String   @default("manual")
+  projectStage          String   @default("pre_diagnostic")
+  contractDemandKw      Float?
+  consultantManualSummary String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  monthlyBills      MonthlyBillRecord[]
+  analysisSnapshots AnalysisSnapshot[]
+}
+
+model MonthlyBillRecord {
+  id                 String  @id @default(cuid())
+  projectId          String
+  billingMonth       String
+  usageKwh           Float
+  totalBillKrw       Float
+  basicChargeKrw     Float?
+  energyChargeKrw    Float?
+  climateChargeKrw   Float?
+  fuelAdjustmentKrw  Float?
+  vatKrw             Float?
+  fundKrw            Float?
+  supplyAmountKrw    Float?
+  sourceFileName     String?
+  isVerified         Boolean @default(false)
+  dataQualityNote    String?
+  note               String?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, billingMonth])
+}
+
+model AnalysisSnapshot {
+  id                       String   @id @default(cuid())
+  projectId                String
+  annualUsageKwh           Float
+  annualBillKrw            Float
+  averageMonthlyUsageKwh   Float
+  averageMonthlyBillKrw    Float
+  averageCostPerKwh        Float
+  maxUsageMonth            String
+  maxUsageValue            Float
+  minUsageMonth            String
+  minUsageValue            Float
+  maxBillMonth             String
+  maxBillValue             Float
+  minBillMonth             String
+  minBillValue             Float
+  seasonalStrengthRatio    Float
+  summerAvgUsage           Float
+  winterAvgUsage           Float
+  shoulderAvgUsage         Float
+  summerAvgBill            Float
+  winterAvgBill            Float
+  shoulderAvgBill          Float
+  abnormalMonthsJson       String
+  insightsJson             String
+  recommendationJson       String
+  monthlyChangesJson       String
+  analysisVersion          String   @default("1.0")
+  inputCompletenessScore   Float    @default(0)
+  confidenceScore          Float    @default(0)
+  limitationsText          String   @default("")
+  consultantOverrideSummary String?
+  createdAt                DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model ReportConfig {
+  id              String  @id @default(cuid())
+  companyName     String  @default("브링 에너지")
+  companyLogoUrl  String?
+  consultantName  String?
+  footerText      String?
+}

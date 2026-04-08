@@ -57,3 +57,10 @@ minio_data/
 *.vtk
 *.vtu
 *.mesh
+
+# Frontend / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/.next/dev/
+frontend/dev.db
+frontend/src/generated/
