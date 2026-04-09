@@ -142,6 +142,16 @@ export default function ReportSummaryPage({ params }: { params: Promise<{ id: st
           </div>
         )}
 
+        {/* Consultant Notes */}
+        {project.consultantManualSummary && (
+          <div className="mb-6">
+            <h2 className="text-base font-semibold text-gray-900 mb-3 border-b pb-1">컨설턴트 종합 의견</h2>
+            <div className="bg-blue-50 border border-blue-200 rounded-md p-4 text-sm text-gray-700 whitespace-pre-wrap">
+              {project.consultantManualSummary}
+            </div>
+          </div>
+        )}
+
         {/* Disclaimer */}
         <div className="mt-8 pt-4 border-t text-xs text-gray-400">
           <p className="mb-1">

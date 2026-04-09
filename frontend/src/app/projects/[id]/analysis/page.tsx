@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
 import { formatWon, formatKwh, formatMonth, formatCostPerKwh, formatPercent } from "@/lib/utils/format";
 import { AnalysisCharts } from "@/components/analysis/analysis-charts";
 import type { AbnormalMonth } from "@/lib/analysis/analysis-flags";
@@ -56,6 +57,7 @@ interface Project {
   customerName: string;
   buildingType: string;
   buildingName: string;
+  consultantManualSummary: string | null;
   monthlyBills: MonthlyBill[];
   analysisSnapshots: AnalysisSnapshot[];
 }
@@ -64,13 +66,35 @@ export default function AnalysisPage({ params }: { params: Promise<{ id: string 
   const { id } = use(params);
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
+  const [consultantNotes, setConsultantNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
 
   useEffect(() => {
     fetch(`/api/projects/${id}`)
       .then((res) => res.json())
-      .then(setProject)
+      .then((data: Project) => {
+        setProject(data);
+        setConsultantNotes(data.consultantManualSummary ?? "");
+      })
       .finally(() => setLoading(false));
   }, [id]);
+
+  async function handleSaveNotes() {
+    setSaving(true);
+    setSaveSuccess(false);
+    try {
+      await fetch(`/api/projects/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ consultantManualSummary: consultantNotes }),
+      });
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } finally {
+      setSaving(false);
+    }
+  }
 
   if (loading) return <div className="text-center py-12 text-gray-500">불러오는 중...</div>;
   if (!project) return <div className="text-center py-12 text-gray-500">프로젝트를 찾을 수 없습니다</div>;
@@ -324,6 +348,42 @@ export default function AnalysisPage({ params }: { params: Promise<{ id: string 
           </div>
         </CardContent>
       </Card>
+
+      {/* Consultant Notes */}
+      <Card className="mb-6 border-blue-200 bg-blue-50/30">
+        <CardHeader>
+          <CardTitle className="text-base text-blue-800">컨설턴트 메모 / 보완 의견</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-xs text-gray-500 mb-3">
+            이 내용은 보고서의 &ldquo;컨설턴트 종합 의견&rdquo; 항목에 포함됩니다.
+          </p>
+          <Textarea
+            value={consultantNotes}
+            onChange={(e) => setConsultantNotes(e.target.value)}
+            placeholder="고객사 현장 특이사항, 분석 보완 의견, 제안 방향 등을 자유롭게 입력하세요..."
+            className="min-h-[120px] text-sm bg-white"
+          />
+          <div className="flex items-center gap-3 mt-3">
+            <Button onClick={handleSaveNotes} disabled={saving} size="sm">
+              {saving ? "저장 중..." : "저장"}
+            </Button>
+            {saveSuccess && (
+              <span className="text-sm text-green-600">저장되었습니다.</span>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Report Buttons */}
+      <div className="flex justify-end gap-2 mb-8">
+        <Link href={`/projects/${id}/report`}>
+          <Button variant="outline">1페이지 요약 보고서</Button>
+        </Link>
+        <Link href={`/projects/${id}/report/detailed`}>
+          <Button>상세 보고서</Button>
+        </Link>
+      </div>
     </div>
   );
 }

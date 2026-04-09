@@ -33,6 +33,27 @@ export async function PUT(
   }
 }
 
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params;
+    const body = await request.json();
+    const { consultantManualSummary } = body;
+    if (typeof consultantManualSummary !== "string") {
+      return NextResponse.json({ error: "consultantManualSummary 필드가 필요합니다" }, { status: 400 });
+    }
+    const project = await updateProject(id, { consultantManualSummary } as any);
+    return NextResponse.json(project);
+  } catch (error) {
+    if (error instanceof Error) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    return NextResponse.json({ error: "알 수 없는 오류" }, { status: 500 });
+  }
+}
+
 export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }

@@ -384,6 +384,16 @@ export default function DetailedReportPage({ params }: { params: Promise<{ id: s
           </div>
         </div>
 
+        {/* Consultant Notes */}
+        {project.consultantManualSummary && (
+          <div className="mb-6">
+            <h3 className="text-sm font-semibold text-gray-700 mb-2 border-b pb-1">컨설턴트 종합 의견</h3>
+            <div className="bg-blue-50 border border-blue-200 rounded-md p-4 text-sm text-gray-700 whitespace-pre-wrap">
+              {project.consultantManualSummary}
+            </div>
+          </div>
+        )}
+
         {/* Final disclaimer */}
         <div className="mt-auto">
           <div className="bg-gray-50 p-3 rounded-md text-xs text-gray-500 mb-4">
